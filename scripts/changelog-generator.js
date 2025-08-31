@@ -116,10 +116,7 @@ async function getPRsFromLastWeek() {
 // Generate changelog from PR data
 async function generateChangelog(prs) {
   const changelog = {
-    features: [],
-    ux: [],
-    website: [],
-    infrastructure: []
+    all: []
   };
   
   // Process each PR
@@ -131,10 +128,7 @@ async function generateChangelog(prs) {
     const prNumber = pr.number;
     const repoName = pr.repository.name;
     
-    // Skip release PRs without meaningful content
-    if (title.toLowerCase() === 'release' && !body.includes('KAN-')) {
-      continue;
-    }
+    // Process ALL PRs - let the LLM decide what's important
     
     // Categorize based on title/content
     const entry = {
@@ -146,78 +140,37 @@ async function generateChangelog(prs) {
       repoName
     };
     
-    // Enhanced categorization based on content, not just repository
-    const content = (title + ' ' + body).toLowerCase();
-    const tickets = kanTickets.join(' ');
-    
-    if (content.includes('ats integration') || content.includes('score sharing') || 
-        content.includes('ai interview') || content.includes('scoring accuracy') ||
-        tickets.includes('KAN-2643') || tickets.includes('KAN-2542') || tickets.includes('KAN-2532')) {
-      changelog.features.push(entry);
-    } else if (content.includes('candidate') && (content.includes('tab') || content.includes('filter') || 
-               content.includes('pdf report') || content.includes('workflow')) ||
-               content.includes('recruiter') || content.includes('user management') ||
-               tickets.includes('KAN-2744') || tickets.includes('KAN-1923') || tickets.includes('KAN-2692')) {
-      changelog.ux.push(entry);
-    } else if (repoName === 'sales-website' || content.includes('website') || content.includes('marketing') ||
-               content.includes('terms') || content.includes('privacy') || content.includes('calendar')) {
-      changelog.website.push(entry);
-    } else {
-      changelog.infrastructure.push(entry);
-    }
+    // Put ALL PRs in a single list - let LLM categorize them
+    changelog.all.push(entry);
   }
   
   return changelog;
 }
 
-// Format changelog for Slack using LLM and Jira integration
+// Format changelog for Slack using batch LLM processing
 async function formatChangelog(changelog) {
   const { start, end } = getLastWeekRange();
   
-  let slack = `*Weekly Product Release Notes*\n_${start} - ${end}_\n\n`;
+  // Collect all PR data with Jira context for batch processing
+  const allPRs = [];
   
-  // Helper function to format section
-  async function formatSection(title, items) {
-    if (items.length === 0) return '';
-    
-    let section = `*${title}*\n\n`;
-    
-    for (const item of items) {
-      const kanRef = item.kanTickets.length > 0 ? `[${item.kanTickets.join(', ')}] ` : '';
-      
-      // Get Jira context for the first ticket (if available)
-      let jiraContext = null;
-      if (item.kanTickets.length > 0) {
-        jiraContext = await getJiraTicketDetails(item.kanTickets[0]);
-      }
-      
-      // Generate business description using LLM + Jira context
-      const businessValue = await generateBusinessDescription(item, jiraContext);
-      
-      section += `• ${businessValue} _${kanRef}(${item.contributor}) - PR #${item.prNumber}_\n`;
+  for (const item of changelog.all) {
+    // Get Jira context for the first ticket (if available)
+    let jiraContext = null;
+    if (item.kanTickets.length > 0) {
+      jiraContext = await getJiraTicketDetails(item.kanTickets[0]);
     }
     
-    return section + '\n';
+    allPRs.push({
+      ...item,
+      jiraContext
+    });
   }
   
-  // Process each section asynchronously
-  if (changelog.features.length > 0) {
-    slack += await formatSection('🚀 Major Features & Integrations', changelog.features);
-  }
+  // Generate the entire changelog using a single LLM call
+  const formattedChangelog = await generateBatchChangelog(allPRs, { start, end });
   
-  if (changelog.ux.length > 0) {
-    slack += await formatSection('🔧 User Experience & Workflow', changelog.ux);
-  }
-  
-  if (changelog.website.length > 0) {
-    slack += await formatSection('🌐 Website & Marketing', changelog.website);
-  }
-  
-  if (changelog.infrastructure.length > 0) {
-    slack += await formatSection('🛠️ Technical Infrastructure', changelog.infrastructure);
-  }
-  
-  return slack.trim();
+  return formattedChangelog;
 }
 
 // Get Jira ticket details with enhanced error handling
@@ -258,86 +211,105 @@ async function getJiraTicketDetails(ticketKey) {
   }
 }
 
-// Generate business-focused description using Gemini 2.5 Flash
-async function generateBusinessDescription(prData, jiraContext = null) {
+// Generate complete changelog using batch LLM processing
+async function generateBatchChangelog(allPRs, dateRange) {
   if (!process.env.GEMINI_API_KEY) {
-    console.warn('GEMINI_API_KEY not set, falling back to basic extraction');
-    return extractBasicBusinessValue(prData.body, prData.title);
+    console.warn('GEMINI_API_KEY not set, falling back to basic format');
+    return generateBasicChangelog(allPRs, dateRange);
   }
   
   try {
-    // Prepare comprehensive context for LLM with enhanced parsing
-    let context = `PR Title: ${prData.title}\n`;
-    context += `Repository: ${prData.repoName}\n`;
-    
-    if (prData.body && prData.body.trim()) {
-      const body = prData.body;
+    // Build comprehensive context for all PRs
+    let prContext = '';
+    allPRs.forEach((pr, index) => {
+      prContext += `\nPR ${index + 1}:\n`;
+      prContext += `- Title: ${pr.title}\n`;
+      prContext += `- Repository: ${pr.repoName}\n`;
+      prContext += `- Contributor: ${pr.contributor}\n`;
+      prContext += `- PR Number: ${pr.prNumber}\n`;
       
-      // Special handling for "Release" PRs - extract individual changes
-      if (prData.title.toLowerCase().includes('release')) {
-        context += `Release PR - Multiple Changes Included:\n`;
+      if (pr.kanTickets && pr.kanTickets.length > 0) {
+        prContext += `- Jira Tickets: ${pr.kanTickets.join(', ')}\n`;
         
-        // Extract bullet points or numbered lists
-        const bulletPoints = body.match(/^\s*[-*]\s+(.+)$/gm) || [];
-        const numberedPoints = body.match(/^\s*\d+\.\s+(.+)$/gm) || [];
-        const changes = [...bulletPoints, ...numberedPoints];
-        
-        if (changes.length > 0) {
-          context += `Individual Changes:\n`;
-          changes.slice(0, 5).forEach(change => { // Limit to first 5 changes
-            context += `- ${change.replace(/^\s*[-*\d\.\s]+/, '').trim()}\n`;
-          });
+        if (pr.jiraContext) {
+          prContext += `- Jira Summary: ${pr.jiraContext.summary}\n`;
+          prContext += `- Jira Type: ${pr.jiraContext.issueType}\n`;
+          if (pr.jiraContext.description && pr.jiraContext.description.trim()) {
+            prContext += `- Jira Description: ${pr.jiraContext.description.substring(0, 200)}...\n`;
+          }
         }
-      } else {
-        context += `PR Description: ${body}\n`;
       }
       
-      // Look for specific sections that provide business context
-      const summaryMatch = body.match(/##?\s*Summary\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
-      if (summaryMatch) {
-        context += `PR Summary: ${summaryMatch[1].trim()}\n`;
+      if (pr.body && pr.body.trim()) {
+        // Extract key information from PR body
+        const body = pr.body.substring(0, 500); // Limit to avoid token overflow
+        prContext += `- PR Body: ${body}\n`;
       }
-      
-      const impactMatch = body.match(/\*\*Impact:\*\*\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*\*\*|$)/is);
-      if (impactMatch) {
-        context += `Business Impact: ${impactMatch[1].trim()}\n`;
-      }
-    }
+    });
     
-    if (jiraContext) {
-      context += `\nJira Ticket (${prData.kanTickets[0]}):\n`;
-      context += `- Summary: ${jiraContext.summary}\n`;
-      context += `- Type: ${jiraContext.issueType}\n`;
-      if (jiraContext.description && jiraContext.description.trim()) {
-        context += `- Description: ${jiraContext.description}\n`;
-      }
-    }
-    
-    const prompt = `You are creating a business changelog entry for Mokka, an AI-powered recruitment platform. Your job is to transform technical development work into compelling business value statements that executives and customers would find meaningful.
+    const prompt = `You are creating a weekly product update for Mokka, an AI-powered recruitment platform. Generate a complete, well-formatted Slack changelog from the provided PR data.
 
 MOKKA PLATFORM CONTEXT:
-- AI-powered recruitment platform for companies to evaluate candidates
+- AI-powered recruitment platform for companies to evaluate candidates  
 - Core features: AI interviews, candidate scoring, ATS integrations (Workable, SparkHire, Kombo)
 - Users: Recruiters, HR teams, hiring managers
 - Key workflows: Candidate invitation → AI interview → Scoring → ATS sync → Hiring decisions
 
-TECHNICAL CHANGE DETAILS:
-${context}
+PR DATA TO PROCESS:
+${prContext}
 
-WRITING GUIDELINES:
-- Write ONE clear sentence explaining the business impact (be concise!)
-- Lead with WHAT was accomplished for users/customers
-- Use specific details when available (ATS names, metrics, workflows)
-- Avoid generic terms like "enhanced", "improved" without context
-- If unclear or minor: "Technical improvements to enhance system reliability"
+REQUIRED OUTPUT FORMAT:
+Create a Slack-formatted changelog with this exact structure:
 
-EXAMPLES:
-- "Automated candidate score sharing with Workable and SparkHire eliminates manual data entry for recruiters"
-- "Extended assessment link validity to 30 days, reducing candidate frustration from expired invitations"
-- "Fixed auto-rejection rules that incorrectly filtered qualified candidates"
-- "Added legal compliance pages (Terms, Privacy Policy) for regulatory requirements"
+*Weekly Product Update*
+_${dateRange.start} - ${dateRange.end}_
 
-Transform this into a concise business impact statement:`;
+*🔥 Week Highlights*
+
+1. [Most important change description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+2. [Second most important change] _[KAN-XXX] (Contributor Name) - PR #XXX_  
+3. [Third most important change] _[KAN-XXX] (Contributor Name) - PR #XXX_
+
+*📋 All Changes*
+
+*🚀 Major Features & Integrations*
+
+• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+
+*🔧 User Experience & Workflow*
+
+• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+
+*🌐 Website & Marketing*  
+
+• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+
+*🛠️ Technical Infrastructure*
+
+• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+
+CATEGORIZATION & DESCRIPTION GUIDELINES:
+- CATEGORIZE each PR into the most appropriate section based on its actual impact:
+  * 🚀 Major Features & Integrations: New features, ATS integrations, AI improvements  
+  * 🔧 User Experience & Workflow: UI changes, candidate management, workflow improvements
+  * 🌐 Website & Marketing: Sales website, marketing pages, public-facing changes
+  * 🛠️ Technical Infrastructure: Security updates, model changes, database changes, dependency updates
+- Write 1 sentence describing exactly WHAT was done (be specific about technical details)
+- Include specific details: model names (GPT-4, GPT-4o-mini), service names, version numbers, API endpoints, dependency versions
+- For security fixes: mention specific vulnerabilities addressed (golang.org/x/crypto, golang.org/x/net versions)
+- For model changes: specify which AI models were updated (rnr_experience, etc.)
+- For integrations: specify which services/APIs were connected  
+- For UI changes: describe which specific screens/workflows were modified
+- Avoid vague terms like "enhanced", "improved", "optimized" without specifics
+- Prioritize Features section items for Week Highlights, then UX, then Infrastructure (especially security), then Website
+
+EXAMPLES OF GOOD DESCRIPTIONS:
+- "Switched AI model from GPT-4 to GPT-4o-mini for candidate interview analysis to reduce processing costs"
+- "Fixed auto-rejection rules for salary requirements that incorrectly filtered out candidates within the specified range" 
+- "Added automated candidate score sync with Workable ATS API to eliminate manual data entry after interviews"
+- "Extended candidate assessment link validity from 7 days to 30 days in invitation emails"
+
+Generate the complete changelog now:`;
     
     const payload = {
       contents: [{
@@ -346,45 +318,111 @@ Transform this into a concise business impact statement:`;
         }]
       }],
       generationConfig: {
-        maxOutputTokens: 150,
+        maxOutputTokens: 20000,
         temperature: 0.3
       }
     };
     
     // Write payload to temp file to avoid shell escaping issues
-    const tempFile = `/tmp/gemini-payload-${Date.now()}.json`;
+    const tempFile = `/tmp/gemini-batch-${Date.now()}.json`;
     fs.writeFileSync(tempFile, JSON.stringify(payload));
     
-    console.log(`Making Gemini API call for: ${prData.title}`);
+    console.log(`Making batch Gemini API call for ${allPRs.length} PRs...`);
     const result = execSync(`curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}" \
       -H "Content-Type: application/json" \
       -d @${tempFile}`, { encoding: 'utf8' });
     
-    console.log(`Gemini API response: ${result.substring(0, 200)}...`);
+    console.log(`Batch Gemini API response: ${result.substring(0, 200)}...`);
     
     // Clean up temp file
     fs.unlinkSync(tempFile);
     
     const response = JSON.parse(result);
     
-    if (response.candidates && response.candidates[0] && response.candidates[0].content && response.candidates[0].content.parts) {
-      let description = response.candidates[0].content.parts[0].text.trim();
+    if (response.error) {
+      const errorMsg = `Gemini API Error: ${response.error.message} (Code: ${response.error.code})`;
+      console.error(errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    if (response.candidates && response.candidates[0]) {
+      const candidate = response.candidates[0];
       
-      // Clean up the response
-      description = description.replace(/^Business Description:?\s*/i, '');
-      if (!description.endsWith('.') && !description.endsWith('!') && !description.endsWith('?')) {
-        description += '.';
+      // Check for MAX_TOKENS or other finish reasons
+      if (candidate.finishReason === 'MAX_TOKENS') {
+        throw new Error('Gemini response truncated due to MAX_TOKENS limit - increase maxOutputTokens or reduce input size');
       }
       
-      return description;
+      if (candidate.finishReason === 'SAFETY') {
+        throw new Error('Gemini response blocked due to safety filters');
+      }
+      
+      if (candidate.content && candidate.content.parts) {
+        const changelog = candidate.content.parts[0].text.trim();
+        return changelog;
+      }
     }
+    
+    throw new Error('Unexpected Gemini API response format: ' + JSON.stringify(response));
   } catch (error) {
-    console.warn('Error calling Gemini API:', error.message);
-    console.warn('Response:', error);
+    console.warn('Error calling batch Gemini API:', error.message);
+    throw error; // Re-throw so main function can handle it
   }
   
-  // Fallback to basic extraction
-  return extractBasicBusinessValue(prData.body, prData.title);
+  // Fallback to basic format
+  return generateBasicChangelog(allPRs, dateRange);
+}
+
+// Generate basic changelog format (fallback when LLM isn't available)  
+function generateBasicChangelog(allPRs, dateRange) {
+  let slack = `*Weekly Product Update*\n_${dateRange.start} - ${dateRange.end}_\n\n`;
+  
+  // Group PRs by section
+  const sections = {
+    'Features': allPRs.filter(pr => pr.section === 'Features'),
+    'UX': allPRs.filter(pr => pr.section === 'UX'), 
+    'Website': allPRs.filter(pr => pr.section === 'Website'),
+    'Infrastructure': allPRs.filter(pr => pr.section === 'Infrastructure')
+  };
+  
+  // Add top highlights (first 3 PRs prioritized by Features, UX, then others)
+  const sortedPRs = allPRs.sort((a, b) => b.priority - a.priority);
+  const highlights = sortedPRs.slice(0, 3);
+  
+  if (highlights.length > 0) {
+    slack += `*🔥 Week Highlights*\n\n`;
+    highlights.forEach((pr, index) => {
+      const kanRef = pr.kanTickets && pr.kanTickets.length > 0 ? `[${pr.kanTickets.join(', ')}] ` : '';
+      const description = extractBasicBusinessValue(pr.body, pr.title);
+      slack += `${index + 1}. ${description} _${kanRef}(${pr.contributor}) - PR #${pr.prNumber}_\n`;
+    });
+    slack += '\n';
+  }
+  
+  slack += `*📋 All Changes*\n\n`;
+  
+  // Add sections with their emojis
+  const sectionConfig = {
+    'Features': '🚀 Major Features & Integrations',
+    'UX': '🔧 User Experience & Workflow', 
+    'Website': '🌐 Website & Marketing',
+    'Infrastructure': '🛠️ Technical Infrastructure'
+  };
+  
+  Object.entries(sectionConfig).forEach(([key, title]) => {
+    const items = sections[key];
+    if (items && items.length > 0) {
+      slack += `*${title}*\n\n`;
+      items.forEach(pr => {
+        const kanRef = pr.kanTickets && pr.kanTickets.length > 0 ? `[${pr.kanTickets.join(', ')}] ` : '';
+        const description = extractBasicBusinessValue(pr.body, pr.title);
+        slack += `• ${description} _${kanRef}(${pr.contributor}) - PR #${pr.prNumber}_\n`;
+      });
+      slack += '\n';
+    }
+  });
+  
+  return slack.trim();
 }
 
 // Basic business value extraction (fallback when LLM isn't available)
@@ -469,6 +507,41 @@ async function postToSlack(markdown) {
   }
 }
 
+// Post error to Slack
+async function postErrorToSlack(error, context = '') {
+  const webhookUrl = process.env.SLACK_WEBHOOK_URL;
+  if (!webhookUrl) {
+    console.error('Cannot post error to Slack: SLACK_WEBHOOK_URL not set');
+    return;
+  }
+  
+  const { start, end } = getLastWeekRange();
+  const errorMessage = `*❌ Weekly Changelog Generation Failed*
+_${start} - ${end}_
+
+**Error:** ${error.message || error}
+**Context:** ${context}
+
+**Stack Trace:**
+\`\`\`
+${error.stack || 'No stack trace available'}
+\`\`\`
+
+*This is an automated error report from the changelog generator.*`;
+
+  try {
+    const payload = {
+      text: errorMessage,
+      username: "Mokka Release Update Bot"
+    };
+    
+    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data '${JSON.stringify(payload)}' ${webhookUrl}`, { encoding: 'utf8' });
+    console.log('Error posted to Slack successfully');
+  } catch (slackError) {
+    console.error('Failed to post error to Slack:', slackError.message);
+  }
+}
+
 // Main function
 async function main() {
   console.log('Generating weekly changelog...');
@@ -478,7 +551,16 @@ async function main() {
     console.log(`Found ${prs.length} PRs from last week`);
     
     if (prs.length === 0) {
-      console.log('No PRs found for last week');
+      const noDataMessage = `*📭 Weekly Product Update*
+_No changes were merged to main/master branches this week_
+
+*This is normal during lighter development periods.*`;
+      
+      if (process.env.SLACK_WEBHOOK_URL) {
+        await postToSlack(noDataMessage);
+      } else {
+        console.log('No PRs found and SLACK_WEBHOOK_URL not set');
+      }
       return;
     }
     
@@ -497,6 +579,10 @@ async function main() {
     
   } catch (error) {
     console.error('Error generating changelog:', error.message);
+    
+    // Post error to Slack if webhook is available
+    await postErrorToSlack(error, 'Main changelog generation process');
+    
     process.exit(1);
   }
 }
