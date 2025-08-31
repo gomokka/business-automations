@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 const { execSync } = require('child_process');
+const fs = require('fs');
 
 // Configuration
 const GITHUB_ORG = 'gomokka';
@@ -350,9 +351,19 @@ Transform this into a concise business impact statement:`;
       }
     };
     
+    // Write payload to temp file to avoid shell escaping issues
+    const tempFile = `/tmp/gemini-payload-${Date.now()}.json`;
+    fs.writeFileSync(tempFile, JSON.stringify(payload));
+    
+    console.log(`Making Gemini API call for: ${prData.title}`);
     const result = execSync(`curl -s -X POST "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}" \
       -H "Content-Type: application/json" \
-      -d '${JSON.stringify(payload).replace(/'/g, "'\"'\"'")}'`, { encoding: 'utf8' });
+      -d @${tempFile}`, { encoding: 'utf8' });
+    
+    console.log(`Gemini API response: ${result.substring(0, 200)}...`);
+    
+    // Clean up temp file
+    fs.unlinkSync(tempFile);
     
     const response = JSON.parse(result);
     
