@@ -198,16 +198,21 @@ async function postToSlack(markdown) {
     return;
   }
   
+  console.log('Posting to Slack webhook...');
+  console.log('Webhook URL (first 50 chars):', webhookUrl.substring(0, 50) + '...');
+  
   const payload = {
     text: markdown,
     username: "Mokka Release Update Bot"
   };
   
   try {
-    execSync(`curl -X POST -H 'Content-type: application/json' --data '${JSON.stringify(payload)}' ${webhookUrl}`, { encoding: 'utf8' });
+    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data '${JSON.stringify(payload)}' ${webhookUrl}`, { encoding: 'utf8' });
+    console.log('Curl response:', result);
     console.log('Successfully posted to Slack!');
   } catch (error) {
     console.error('Error posting to Slack:', error.message);
+    console.error('Error details:', error);
   }
 }
 
