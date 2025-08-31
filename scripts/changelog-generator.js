@@ -46,8 +46,8 @@ async function getPRsFromLastWeek() {
   
   try {
     // Search for PRs merged to main/master in the date range
-    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged=${start}..${end} --base=main --limit=50 --json title,number,url,body,user,repository`, { encoding: 'utf8' });
-    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged=${start}..${end} --base=master --limit=50 --json title,number,url,body,user,repository`, { encoding: 'utf8' });
+    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
+    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
     
     const allPRs = [
       ...JSON.parse(mainPRs || '[]'),
@@ -79,7 +79,7 @@ async function generateChangelog(prs) {
   for (const pr of prs) {
     const title = pr.title;
     const body = pr.body || '';
-    const contributor = await getGitHubFullName(pr.user.login);
+    const contributor = await getGitHubFullName(pr.author.login);
     const kanTickets = extractKanTickets(title + ' ' + body);
     const prNumber = pr.number;
     const repoName = pr.repository.name;
