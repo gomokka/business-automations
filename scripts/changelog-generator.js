@@ -49,7 +49,7 @@ async function getPRsFromLastWeek() {
   const { start, end } = getLastWeekRange();
   
   try {
-    // Search for PRs merged to main/master in the date range
+    // Search for PRs merged to main/master branches across ALL repositories  
     console.log(`Searching for PRs with: --owner=${GITHUB_ORG} --merged-at=${start}..${end}`);
     
     const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
