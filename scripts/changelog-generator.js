@@ -54,14 +54,30 @@ async function getPRsFromLastWeek() {
     
     const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
     console.log('Main PRs result length:', mainPRs.length);
+    console.log('Main PRs raw result:', mainPRs.substring(0, 200) + '...');
     
     const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
     console.log('Master PRs result length:', masterPRs.length);
+    console.log('Master PRs raw result:', masterPRs.substring(0, 200) + '...');
     
-    const mainPRsData = JSON.parse(mainPRs || '[]');
-    const masterPRsData = JSON.parse(masterPRs || '[]');
-    console.log('Main PRs parsed:', mainPRsData.length);
-    console.log('Master PRs parsed:', masterPRsData.length);
+    let mainPRsData = [];
+    let masterPRsData = [];
+    
+    try {
+      mainPRsData = JSON.parse(mainPRs || '[]');
+      console.log('Main PRs parsed successfully:', mainPRsData.length);
+    } catch (error) {
+      console.error('Error parsing main PRs JSON:', error.message);
+      console.log('Raw main PRs data:', mainPRs);
+    }
+    
+    try {
+      masterPRsData = JSON.parse(masterPRs || '[]');
+      console.log('Master PRs parsed successfully:', masterPRsData.length);
+    } catch (error) {
+      console.error('Error parsing master PRs JSON:', error.message);
+      console.log('Raw master PRs data:', masterPRs);
+    }
     
     const allPRs = [...mainPRsData, ...masterPRsData];
     console.log('Total PRs before deduplication:', allPRs.length);
