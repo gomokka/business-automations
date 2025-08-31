@@ -7,19 +7,23 @@ const GITHUB_ORG = 'gomokka';
 const JIRA_ENDPOINT = 'https://go-mokka.atlassian.net';
 const JIRA_USER = 'max@gomokka.com';
 
-// Get date range for last week
+// Get date range for last 7 days
 function getLastWeekRange() {
+  // Get current date in UTC to ensure consistency across environments
   const today = new Date();
-  const lastMonday = new Date(today);
-  lastMonday.setDate(today.getDate() - (today.getDay() + 6) % 7);
+  console.log('Current date:', today.toISOString());
   
-  const endDate = new Date(lastMonday);
-  endDate.setDate(lastMonday.getDate() + 6);
+  // Get the last 7 days (from 7 days ago to today)
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(today.getDate() - 7);
   
-  return {
-    start: lastMonday.toISOString().split('T')[0],
-    end: endDate.toISOString().split('T')[0]
+  const range = {
+    start: sevenDaysAgo.toISOString().split('T')[0],
+    end: today.toISOString().split('T')[0]
   };
+  
+  console.log('Date range for last 7 days:', range);
+  return range;
 }
 
 // Get full name from GitHub API
@@ -46,8 +50,13 @@ async function getPRsFromLastWeek() {
   
   try {
     // Search for PRs merged to main/master in the date range
+    console.log(`Searching for PRs with: --owner=${GITHUB_ORG} --merged-at=${start}..${end}`);
+    
     const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
+    console.log('Main PRs result length:', mainPRs.length);
+    
     const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
+    console.log('Master PRs result length:', masterPRs.length);
     
     const allPRs = [
       ...JSON.parse(mainPRs || '[]'),
