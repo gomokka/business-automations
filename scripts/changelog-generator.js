@@ -213,9 +213,15 @@ async function getJiraTicketDetails(ticketKey) {
   try {
     const jiraUser = 'max@gomokka.com';
     const jiraEndpoint = 'https://go-mokka.atlassian.net';
-    const auth = Buffer.from(`${jiraUser}:${process.env.JIRA_API_TOKEN}`).toString('base64');
+    const jiraToken = process.env.JIRA_API_TOKEN;
     
+    // Debug logging for environment differences
     console.log(`Fetching Jira ticket: ${ticketKey}`);
+    console.log('Jira user:', jiraUser);
+    console.log('Jira token present:', !!jiraToken);
+    console.log('Jira token length:', jiraToken ? jiraToken.length : 0);
+    
+    const auth = Buffer.from(`${jiraUser}:${jiraToken}`).toString('base64');
     const result = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/issue/${ticketKey}?fields=summary,description,issuetype"`, { encoding: 'utf8' });
     
     console.log(`Jira API response for ${ticketKey}:`, result.substring(0, 200) + '...');
@@ -556,9 +562,17 @@ async function postToSlack(markdown) {
   };
   
   try {
-    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data '${JSON.stringify(payload)}' ${webhookUrl}`, { encoding: 'utf8' });
+    // Write JSON payload to a temporary file to avoid shell escaping issues
+    const fs = require('fs');
+    const tempFile = '/tmp/slack_payload.json';
+    fs.writeFileSync(tempFile, JSON.stringify(payload));
+    
+    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data @${tempFile} ${webhookUrl}`, { encoding: 'utf8' });
     console.log('Curl response:', result);
     console.log('Successfully posted to Slack!');
+    
+    // Clean up temp file
+    fs.unlinkSync(tempFile);
   } catch (error) {
     console.error('Error posting to Slack:', error.message);
     console.error('Error details:', error);
@@ -593,8 +607,16 @@ ${error.stack || 'No stack trace available'}
       username: "Mokka Release Update Bot"
     };
     
-    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data '${JSON.stringify(payload)}' ${webhookUrl}`, { encoding: 'utf8' });
+    // Write JSON payload to a temporary file to avoid shell escaping issues
+    const fs = require('fs');
+    const tempFile = '/tmp/slack_error_payload.json';
+    fs.writeFileSync(tempFile, JSON.stringify(payload));
+    
+    const result = execSync(`curl -X POST -H 'Content-type: application/json' --data @${tempFile} ${webhookUrl}`, { encoding: 'utf8' });
     console.log('Error posted to Slack successfully');
+    
+    // Clean up temp file
+    fs.unlinkSync(tempFile);
   } catch (slackError) {
     console.error('Failed to post error to Slack:', slackError.message);
   }
