@@ -215,21 +215,8 @@ async function getJiraTicketDetails(ticketKey) {
     const jiraEndpoint = 'https://go-mokka.atlassian.net';
     const jiraToken = process.env.JIRA_API_TOKEN;
     
-    // Debug logging for environment differences
     console.log(`Fetching Jira ticket: ${ticketKey}`);
-    console.log('Jira user:', jiraUser);
-    console.log('Jira token present:', !!jiraToken);
-    console.log('Jira token length:', jiraToken ? jiraToken.length : 0);
-    
     const auth = Buffer.from(`${jiraUser}:${jiraToken}`).toString('base64');
-    
-    // First test basic auth with /myself endpoint
-    try {
-      const authTestResult = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/myself"`, { encoding: 'utf8' });
-      console.log(`Jira auth test for ${ticketKey}:`, authTestResult.substring(0, 100) + '...');
-    } catch (authError) {
-      console.log(`Jira auth test failed for ${ticketKey}:`, authError.message);
-    }
     
     const result = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/issue/${ticketKey}?fields=summary,description,issuetype"`, { encoding: 'utf8' });
     
