@@ -27,7 +27,7 @@ jobs:
       env:
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
-        GITHUB_TOKEN: ${{ github.token }}
+        GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
       run: |
         cd scripts
         node changelog-generator.js
