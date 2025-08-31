@@ -222,6 +222,15 @@ async function getJiraTicketDetails(ticketKey) {
     console.log('Jira token length:', jiraToken ? jiraToken.length : 0);
     
     const auth = Buffer.from(`${jiraUser}:${jiraToken}`).toString('base64');
+    
+    // First test basic auth with /myself endpoint
+    try {
+      const authTestResult = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/myself"`, { encoding: 'utf8' });
+      console.log(`Jira auth test for ${ticketKey}:`, authTestResult.substring(0, 100) + '...');
+    } catch (authError) {
+      console.log(`Jira auth test failed for ${ticketKey}:`, authError.message);
+    }
+    
     const result = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/issue/${ticketKey}?fields=summary,description,issuetype"`, { encoding: 'utf8' });
     
     console.log(`Jira API response for ${ticketKey}:`, result.substring(0, 200) + '...');
