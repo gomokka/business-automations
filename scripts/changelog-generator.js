@@ -143,80 +143,135 @@ async function generateChangelog(prs) {
   return changelog;
 }
 
-// Format changelog as Markdown
+// Format changelog for Slack (using Slack formatting)
 function formatChangelog(changelog) {
   const { start, end } = getLastWeekRange();
   
-  let markdown = `# **Weekly Product Release Notes**\n## *${start} - ${end}*\n\n`;
+  let slack = `*Weekly Product Release Notes*\n_${start} - ${end}_\n\n`;
   
   if (changelog.features.length > 0) {
-    markdown += `### **🚀 Major Features & Integrations**\n\n`;
+    slack += `*🚀 Major Features & Integrations*\n\n`;
     changelog.features.forEach(item => {
       const kanRef = item.kanTickets.length > 0 ? `[${item.kanTickets.join(', ')}] ` : '';
-      markdown += `- **${item.title}**: ${extractBusinessValue(item.body)} *${kanRef}(${item.contributor}) - PR #${item.prNumber}*\n`;
+      const businessValue = extractBusinessValue(item.body);
+      slack += `• *${item.title}*: ${businessValue} _${kanRef}(${item.contributor}) - PR #${item.prNumber}_\n`;
     });
-    markdown += '\n';
+    slack += '\n';
   }
   
   if (changelog.ux.length > 0) {
-    markdown += `### **🔧 User Experience & Workflow**\n\n`;
+    slack += `*🔧 User Experience & Workflow*\n\n`;
     changelog.ux.forEach(item => {
       const kanRef = item.kanTickets.length > 0 ? `[${item.kanTickets.join(', ')}] ` : '';
-      markdown += `- **${item.title}**: ${extractBusinessValue(item.body)} *${kanRef}(${item.contributor}) - PR #${item.prNumber}*\n`;
+      const businessValue = extractBusinessValue(item.body);
+      slack += `• *${item.title}*: ${businessValue} _${kanRef}(${item.contributor}) - PR #${item.prNumber}_\n`;
     });
-    markdown += '\n';
+    slack += '\n';
   }
   
   if (changelog.website.length > 0) {
-    markdown += `### **🌐 Website & Marketing**\n\n`;
+    slack += `*🌐 Website & Marketing*\n\n`;
     changelog.website.forEach(item => {
       const kanRef = item.kanTickets.length > 0 ? `[${item.kanTickets.join(', ')}] ` : '';
-      markdown += `- **${item.title}**: ${extractBusinessValue(item.body)} *${kanRef}(${item.contributor}) - PR #${item.prNumber}*\n`;
+      const businessValue = extractBusinessValue(item.body);
+      slack += `• *${item.title}*: ${businessValue} _${kanRef}(${item.contributor}) - PR #${item.prNumber}_\n`;
     });
-    markdown += '\n';
+    slack += '\n';
   }
   
   if (changelog.infrastructure.length > 0) {
-    markdown += `### **🛠️ Technical Infrastructure**\n\n`;
+    slack += `*🛠️ Technical Infrastructure*\n\n`;
     changelog.infrastructure.forEach(item => {
       const kanRef = item.kanTickets.length > 0 ? `[${item.kanTickets.join(', ')}] ` : '';
-      markdown += `- **${item.title}**: ${extractBusinessValue(item.body)} *${kanRef}(${item.contributor}) - PR #${item.prNumber}*\n`;
+      const businessValue = extractBusinessValue(item.body);
+      slack += `• *${item.title}*: ${businessValue} _${kanRef}(${item.contributor}) - PR #${item.prNumber}_\n`;
     });
   }
   
-  return markdown;
+  return slack;
 }
 
-// Extract business value from PR body
+// Extract business value from PR body with enhanced extraction
 function extractBusinessValue(body) {
   if (!body) return 'Technical improvements and updates';
   
-  // Look for Impact section
-  const impactMatch = body.match(/\*\*Impact:\*\*(.*?)(?:\r?\n|$)/i);
+  // Look for Impact section first
+  const impactMatch = body.match(/\*\*Impact:\*\*\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*\*\*|$)/is);
   if (impactMatch) {
-    return impactMatch[1].trim();
+    return cleanDescription(impactMatch[1].trim());
   }
   
   // Look for Summary section
-  const summaryMatch = body.match(/## Summary\s*(.*?)(?:\r?\n\r?\n|$)/is);
+  const summaryMatch = body.match(/##?\s*Summary\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
   if (summaryMatch) {
-    return summaryMatch[1].trim().substring(0, 200) + '...';
+    return cleanDescription(summaryMatch[1].trim());
   }
   
-  // Fallback to first meaningful line
-  const lines = body.split('\n').filter(line => 
-    line.trim() && 
-    !line.startsWith('#') && 
-    !line.startsWith('*') && 
-    !line.startsWith('-') &&
-    !line.includes('Contributors:')
-  );
+  // Look for What/Description section
+  const whatMatch = body.match(/##?\s*(?:What|Description)\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
+  if (whatMatch) {
+    return cleanDescription(whatMatch[1].trim());
+  }
+  
+  // Look for bullet points describing changes
+  const bulletMatch = body.match(/^\s*[-*]\s+(.+?)$/m);
+  if (bulletMatch) {
+    const description = bulletMatch[1].trim();
+    if (description.length > 20) {
+      return cleanDescription(description);
+    }
+  }
+  
+  // Get first substantial paragraph (skip short lines)
+  const lines = body.split('\n').filter(line => {
+    const trimmed = line.trim();
+    return trimmed && 
+           trimmed.length > 20 &&
+           !trimmed.startsWith('#') && 
+           !trimmed.startsWith('*') && 
+           !trimmed.startsWith('-') &&
+           !trimmed.includes('Contributors:') &&
+           !trimmed.startsWith('Co-authored-by:') &&
+           !trimmed.match(/^\w+:\s/) && // Skip "Type: feature" etc
+           !trimmed.match(/^https?:/); // Skip URLs
+  });
   
   if (lines.length > 0) {
-    return lines[0].trim().substring(0, 200);
+    return cleanDescription(lines[0].trim());
   }
   
   return 'Technical improvements and updates';
+}
+
+// Clean and format description for better readability
+function cleanDescription(description) {
+  if (!description) return 'Technical improvements and updates';
+  
+  // Remove excessive whitespace and newlines
+  let cleaned = description.replace(/\s+/g, ' ').trim();
+  
+  // Remove markdown formatting
+  cleaned = cleaned.replace(/\*\*(.*?)\*\*/g, '$1'); // Remove bold
+  cleaned = cleaned.replace(/\*(.*?)\*/g, '$1'); // Remove italics
+  cleaned = cleaned.replace(/`([^`]+)`/g, '$1'); // Remove code backticks
+  
+  // Truncate if too long but try to end at a sentence
+  if (cleaned.length > 250) {
+    const truncated = cleaned.substring(0, 250);
+    const lastSentence = truncated.lastIndexOf('.');
+    if (lastSentence > 100) {
+      cleaned = truncated.substring(0, lastSentence + 1);
+    } else {
+      cleaned = truncated + '...';
+    }
+  }
+  
+  // Ensure it ends with proper punctuation
+  if (!cleaned.match(/[.!?]$/)) {
+    cleaned += '.';
+  }
+  
+  return cleaned;
 }
 
 // Post to Slack
@@ -259,13 +314,13 @@ async function main() {
     }
     
     const changelog = await generateChangelog(prs);
-    const markdown = formatChangelog(changelog);
+    const slackMessage = formatChangelog(changelog);
     
     console.log('Generated changelog:');
-    console.log(markdown);
+    console.log(slackMessage);
     
     if (process.env.SLACK_WEBHOOK_URL) {
-      await postToSlack(markdown);
+      await postToSlack(slackMessage);
     } else {
       console.log('SLACK_WEBHOOK_URL not set, skipping Slack post');
     }
