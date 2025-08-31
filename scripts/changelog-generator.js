@@ -123,24 +123,54 @@ async function generateChangelog(prs) {
   for (const pr of prs) {
     const title = pr.title;
     const body = pr.body || '';
-    const contributor = await getGitHubFullName(pr.author.login);
+    
+    // Enhanced contributor detection - parse all contributors from Release PRs
+    let contributor = await getGitHubFullName(pr.author.login);
+    let allContributors = [contributor]; // Start with PR author
+    
+    // For Release PRs, parse the Contributors section to get all actual contributors
+    if (title.toLowerCase() === 'release' && body) {
+      const contributorsMatch = body.match(/\*\*Contributors:\*\*\s*(.+)/i);
+      if (contributorsMatch) {
+        // Extract @mentions and convert to display names
+        const mentions = contributorsMatch[1].match(/@([a-zA-Z0-9-_]+)/g) || [];
+        const releaseContributors = [];
+        
+        for (const mention of mentions) {
+          const username = mention.substring(1); // Remove @
+          if (username !== 'bot' && !username.includes('[bot]')) {
+            const fullName = await getGitHubFullName(username);
+            releaseContributors.push(fullName);
+          }
+        }
+        
+        if (releaseContributors.length > 0) {
+          allContributors = releaseContributors;
+          // For display purposes, use the first contributor or all if multiple
+          contributor = releaseContributors.length === 1 ? 
+            releaseContributors[0] : 
+            releaseContributors.join(', ');
+        }
+      }
+    }
+    
     const kanTickets = extractKanTickets(title + ' ' + body);
     const prNumber = pr.number;
     const repoName = pr.repository.name;
+    const prUrl = pr.url;
     
     // Process ALL PRs - let the LLM decide what's important
-    
-    // Categorize based on title/content
     const entry = {
       title,
       body,
       contributor,
+      allContributors, // Include all contributors for LLM context
       kanTickets,
       prNumber,
-      repoName
+      repoName,
+      url: prUrl
     };
     
-    // Put ALL PRs in a single list - let LLM categorize them
     changelog.all.push(entry);
   }
   
@@ -225,11 +255,17 @@ async function generateBatchChangelog(allPRs, dateRange) {
       prContext += `\nPR ${index + 1}:\n`;
       prContext += `- Title: ${pr.title}\n`;
       prContext += `- Repository: ${pr.repoName}\n`;
-      prContext += `- Contributor: ${pr.contributor}\n`;
+      prContext += `- PR Author: ${pr.contributor}\n`;
+      if (pr.allContributors && pr.allContributors.length > 1) {
+        prContext += `- All Contributors: ${pr.allContributors.join(', ')}\n`;
+      }
       prContext += `- PR Number: ${pr.prNumber}\n`;
+      prContext += `- PR URL: ${pr.url}\n`;
       
       if (pr.kanTickets && pr.kanTickets.length > 0) {
         prContext += `- Jira Tickets: ${pr.kanTickets.join(', ')}\n`;
+        const jiraUrls = pr.kanTickets.map(ticket => `https://go-mokka.atlassian.net/browse/${ticket}`);
+        prContext += `- Jira URLs: ${jiraUrls.join(', ')}\n`;
         
         if (pr.jiraContext) {
           prContext += `- Jira Summary: ${pr.jiraContext.summary}\n`;
@@ -266,27 +302,27 @@ _${dateRange.start} - ${dateRange.end}_
 
 *🔥 Week Highlights*
 
-1. [Most important change description] _[KAN-XXX] (Contributor Name) - PR #XXX_
-2. [Second most important change] _[KAN-XXX] (Contributor Name) - PR #XXX_  
-3. [Third most important change] _[KAN-XXX] (Contributor Name) - PR #XXX_
+1. [Most important change description] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](PR_URL)_
+2. [Second most important change] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](PR_URL)_  
+3. [Third most important change] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](PR_URL)_
 
 *📋 All Changes*
 
 *🚀 Major Features & Integrations*
 
-• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+• [Specific description] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](https://github.com/gomokka/repo/pull/XXX)_
 
 *🔧 User Experience & Workflow*
 
-• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+• [Specific description] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](https://github.com/gomokka/repo/pull/XXX)_
 
 *🌐 Website & Marketing*  
 
-• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+• [Specific description] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](https://github.com/gomokka/repo/pull/XXX)_
 
 *🛠️ Technical Infrastructure*
 
-• [Specific description] _[KAN-XXX] (Contributor Name) - PR #XXX_
+• [Specific description] _[KAN-XXX](https://go-mokka.atlassian.net/browse/KAN-XXX) (Contributor Name) - [PR #XXX](https://github.com/gomokka/repo/pull/XXX)_
 
 CATEGORIZATION & DESCRIPTION GUIDELINES:
 - CATEGORIZE each PR into the most appropriate section based on its actual impact:
@@ -302,6 +338,28 @@ CATEGORIZATION & DESCRIPTION GUIDELINES:
 - For UI changes: describe which specific screens/workflows were modified
 - Avoid vague terms like "enhanced", "improved", "optimized" without specifics
 - Prioritize Features section items for Week Highlights, then UX, then Infrastructure (especially security), then Website
+
+CONTRIBUTOR ATTRIBUTION GUIDELINES:
+- For Release PRs: Credit the person who actually did the work, not just the release author
+- For dependency updates by Dependabot: Credit the person who approved/merged, not the bot
+- When multiple contributors are listed, credit the primary contributor based on the work type
+- Use your judgment to determine the most appropriate contributor based on the work content
+
+HANDLING MINIMAL DATA PRs - SPECIFIC EXAMPLES:
+- PR title "Release" in past_roles_scorer repo → "Released updates to the past_roles_scorer service for improved candidate role evaluation"
+- PR title "Change rnr_experience model" → "Updated the rnr_experience AI model in candidate-scoring-service to improve experience evaluation accuracy"
+- PR title "updates go.mod" → "Updated Go module dependencies in [repo_name] service for improved security and performance"
+- NEVER use vague terms like "General release update" - always be specific about the service and potential impact
+- Use repository name to infer service purpose: scoring services = evaluation improvements, api services = performance/reliability, frontend = user experience
+
+OUTPUT FORMATTING - CRITICAL REQUIREMENTS:
+- MANDATORY: Use markdown hyperlink format for ALL Jira tickets: [KAN-123](https://go-mokka.atlassian.net/browse/KAN-123)
+- MANDATORY: Use markdown hyperlink format for ALL PRs: [PR #123](https://github.com/gomokka/repo/pull/123)
+- NEVER use plain text like "KAN-123" or "PR #123" - ALWAYS make them clickable links
+- NEVER use backticks around technical terms - they create distracting red highlights in Slack
+- Technical terms should be in plain text: book_a_demo, TestTaskInvitationEmailTemplate, rnr_experience
+- Replace PR_URL_PROVIDED with the actual PR URL from the data
+- Example correct format: _[KAN-2692](https://go-mokka.atlassian.net/browse/KAN-2692) (Marcio Oliveira) - [PR #1126](https://github.com/gomokka/application-frontend/pull/1126)_
 
 EXAMPLES OF GOOD DESCRIPTIONS:
 - "Switched AI model from GPT-4 to GPT-4o-mini for candidate interview analysis to reduce processing costs"
