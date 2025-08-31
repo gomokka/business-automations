@@ -27,8 +27,24 @@ function getLastWeekRange() {
   return range;
 }
 
-// Get full name from GitHub API
+// Contributor name mapping for known team members
+const contributorMap = {
+  'oliveiramarcio-gomokka': 'Marcio Oliveira',
+  'ahmedLawal': 'Ahmed Lawal',
+  'ak-mokka': 'Alex Khazanovitch', 
+  'ShaheryarAbid': 'Shaheryar',
+  'aniket-mokka': 'Aniket',
+  'Aneesh-gomokka': 'Aneesh',
+  'vinicius-nepomuceno-gomokka': 'Vinicius Nepomuceno'
+};
+
+// Get full name with mapping fallback to GitHub API
 async function getGitHubFullName(username) {
+  // Check mapping first
+  if (contributorMap[username]) {
+    return contributorMap[username];
+  }
+  
   try {
     const result = execSync(`gh api users/${username} --jq '.name // .login'`, { encoding: 'utf8' });
     return result.trim();
@@ -53,11 +69,11 @@ async function getPRsFromLastWeek() {
     // Search for PRs merged to main/master branches using precise timestamps to prevent overlaps
     console.log(`Searching for PRs with timestamps: --owner=${GITHUB_ORG} --merged-at=${startTimestamp}..${endTimestamp}`);
     
-    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository,mergedAt`, { encoding: 'utf8' });
+    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository,closedAt`, { encoding: 'utf8' });
     console.log('Main PRs result length:', mainPRs.length);
     console.log('Main PRs raw result:', mainPRs.substring(0, 200) + '...');
     
-    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository,mergedAt`, { encoding: 'utf8' });
+    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository,closedAt`, { encoding: 'utf8' });
     console.log('Master PRs result length:', masterPRs.length);
     console.log('Master PRs raw result:', masterPRs.substring(0, 200) + '...');
     
@@ -129,13 +145,22 @@ async function generateChangelog(prs) {
       repoName
     };
     
-    // Simple categorization logic
-    if (title.includes('feat') || body.includes('ATS integration') || body.includes('AI interview')) {
+    // Enhanced categorization based on content, not just repository
+    const content = (title + ' ' + body).toLowerCase();
+    const tickets = kanTickets.join(' ');
+    
+    if (content.includes('ats integration') || content.includes('score sharing') || 
+        content.includes('ai interview') || content.includes('scoring accuracy') ||
+        tickets.includes('KAN-2643') || tickets.includes('KAN-2542') || tickets.includes('KAN-2532')) {
       changelog.features.push(entry);
-    } else if (title.includes('sales-website') || repoName === 'sales-website') {
-      changelog.website.push(entry);
-    } else if (title.includes('fix') || title.includes('UX') || body.includes('candidate')) {
+    } else if (content.includes('candidate') && (content.includes('tab') || content.includes('filter') || 
+               content.includes('pdf report') || content.includes('workflow')) ||
+               content.includes('recruiter') || content.includes('user management') ||
+               tickets.includes('KAN-2744') || tickets.includes('KAN-1923') || tickets.includes('KAN-2692')) {
       changelog.ux.push(entry);
+    } else if (repoName === 'sales-website' || content.includes('website') || content.includes('marketing') ||
+               content.includes('terms') || content.includes('privacy') || content.includes('calendar')) {
+      changelog.website.push(entry);
     } else {
       changelog.infrastructure.push(entry);
     }
@@ -240,21 +265,39 @@ async function generateBusinessDescription(prData, jiraContext = null) {
   }
   
   try {
-    // Prepare comprehensive context for LLM
+    // Prepare comprehensive context for LLM with enhanced parsing
     let context = `PR Title: ${prData.title}\n`;
     context += `Repository: ${prData.repoName}\n`;
     
     if (prData.body && prData.body.trim()) {
-      // Extract key sections from PR body
-      context += `PR Description: ${prData.body}\n`;
+      const body = prData.body;
+      
+      // Special handling for "Release" PRs - extract individual changes
+      if (prData.title.toLowerCase().includes('release')) {
+        context += `Release PR - Multiple Changes Included:\n`;
+        
+        // Extract bullet points or numbered lists
+        const bulletPoints = body.match(/^\s*[-*]\s+(.+)$/gm) || [];
+        const numberedPoints = body.match(/^\s*\d+\.\s+(.+)$/gm) || [];
+        const changes = [...bulletPoints, ...numberedPoints];
+        
+        if (changes.length > 0) {
+          context += `Individual Changes:\n`;
+          changes.slice(0, 5).forEach(change => { // Limit to first 5 changes
+            context += `- ${change.replace(/^\s*[-*\d\.\s]+/, '').trim()}\n`;
+          });
+        }
+      } else {
+        context += `PR Description: ${body}\n`;
+      }
       
       // Look for specific sections that provide business context
-      const summaryMatch = prData.body.match(/##?\s*Summary\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
+      const summaryMatch = body.match(/##?\s*Summary\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
       if (summaryMatch) {
         context += `PR Summary: ${summaryMatch[1].trim()}\n`;
       }
       
-      const impactMatch = prData.body.match(/\*\*Impact:\*\*\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*\*\*|$)/is);
+      const impactMatch = body.match(/\*\*Impact:\*\*\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*\*\*|$)/is);
       if (impactMatch) {
         context += `Business Impact: ${impactMatch[1].trim()}\n`;
       }
@@ -281,21 +324,19 @@ TECHNICAL CHANGE DETAILS:
 ${context}
 
 WRITING GUIDELINES:
-- Write 2-3 specific sentences explaining WHAT was done and WHY it matters
-- Lead with the business benefit, then explain the capability
-- Use active voice and specific metrics/outcomes when possible
-- Include the user impact (recruiters, candidates, or hiring managers)
-- Avoid generic phrases like "enhanced", "improved", "better" without specifics
-- If it's ATS-related, mention the specific ATS system and workflow benefit
-- If it's AI interview related, mention the scoring/evaluation improvement
-- If it's candidate flow related, mention the recruiter workflow impact
+- Write ONE clear sentence explaining the business impact (be concise!)
+- Lead with WHAT was accomplished for users/customers
+- Use specific details when available (ATS names, metrics, workflows)
+- Avoid generic terms like "enhanced", "improved" without context
+- If unclear or minor: "Technical improvements to enhance system reliability"
 
-EXAMPLES OF GOOD DESCRIPTIONS:
-- "Automated score sharing with Workable and SparkHire eliminates manual data entry, reducing recruiter workload by sending candidate profiles and scores directly to external ATS systems upon interview completion."
-- "Extended assessment link validity from 7 to 30 days, reducing candidate frustration from expired invitations and decreasing support tickets by 40%."
-- "Fixed auto-rejection rules for salary and language requirements that were incorrectly processing qualified candidates, preventing revenue loss from missed hires."
+EXAMPLES:
+- "Automated candidate score sharing with Workable and SparkHire eliminates manual data entry for recruiters"
+- "Extended assessment link validity to 30 days, reducing candidate frustration from expired invitations"
+- "Fixed auto-rejection rules that incorrectly filtered qualified candidates"
+- "Added legal compliance pages (Terms, Privacy Policy) for regulatory requirements"
 
-Transform this technical change into a compelling business description:`;
+Transform this into a concise business impact statement:`;
     
     const payload = {
       contents: [{
