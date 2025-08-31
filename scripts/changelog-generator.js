@@ -7,22 +7,23 @@ const GITHUB_ORG = 'gomokka';
 const JIRA_ENDPOINT = 'https://go-mokka.atlassian.net';
 const JIRA_USER = 'max@gomokka.com';
 
-// Get date range for last 7 days
+// Get date range for last 7 days with proper timestamps to prevent overlaps
 function getLastWeekRange() {
-  // Get current date in UTC to ensure consistency across environments
-  const today = new Date();
-  console.log('Current date:', today.toISOString());
+  const now = new Date();
+  console.log('Current timestamp:', now.toISOString());
   
-  // Get the last 7 days (from 7 days ago to today)
-  const sevenDaysAgo = new Date(today);
-  sevenDaysAgo.setDate(today.getDate() - 7);
+  // Use exact timestamps to prevent overlaps
+  // End: current moment, Start: exactly 7 days ago from this moment
+  const sevenDaysAgo = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
   
   const range = {
-    start: sevenDaysAgo.toISOString().split('T')[0],
-    end: today.toISOString().split('T')[0]
+    start: sevenDaysAgo.toISOString().split('T')[0], // Keep date format for display
+    end: now.toISOString().split('T')[0],
+    startTimestamp: sevenDaysAgo.toISOString(), // Full timestamp for API calls
+    endTimestamp: now.toISOString()
   };
   
-  console.log('Date range for last 7 days:', range);
+  console.log('Date range with timestamps:', range);
   return range;
 }
 
@@ -44,19 +45,19 @@ function extractKanTickets(text) {
   return [...new Set(matches.map(match => match[0].toUpperCase()))];
 }
 
-// Get PR data from GitHub
+// Get PR data from GitHub using precise timestamps
 async function getPRsFromLastWeek() {
-  const { start, end } = getLastWeekRange();
+  const { start, end, startTimestamp, endTimestamp } = getLastWeekRange();
   
   try {
-    // Search for PRs merged to main/master branches across ALL repositories  
-    console.log(`Searching for PRs with: --owner=${GITHUB_ORG} --merged-at=${start}..${end}`);
+    // Search for PRs merged to main/master branches using precise timestamps to prevent overlaps
+    console.log(`Searching for PRs with timestamps: --owner=${GITHUB_ORG} --merged-at=${startTimestamp}..${endTimestamp}`);
     
-    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
+    const mainPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=main --limit=50 --json title,number,url,body,author,repository,mergedAt`, { encoding: 'utf8' });
     console.log('Main PRs result length:', mainPRs.length);
     console.log('Main PRs raw result:', mainPRs.substring(0, 200) + '...');
     
-    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
+    const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository,mergedAt`, { encoding: 'utf8' });
     console.log('Master PRs result length:', masterPRs.length);
     console.log('Master PRs raw result:', masterPRs.substring(0, 200) + '...');
     
@@ -193,9 +194,10 @@ async function formatChangelog(changelog) {
   return slack.trim();
 }
 
-// Get Jira ticket details
+// Get Jira ticket details with enhanced error handling
 async function getJiraTicketDetails(ticketKey) {
   if (!process.env.JIRA_API_TOKEN) {
+    console.log(`Skipping Jira fetch for ${ticketKey} - no JIRA_API_TOKEN`);
     return null;
   }
   
@@ -204,15 +206,28 @@ async function getJiraTicketDetails(ticketKey) {
     const jiraEndpoint = 'https://go-mokka.atlassian.net';
     const auth = Buffer.from(`${jiraUser}:${process.env.JIRA_API_TOKEN}`).toString('base64');
     
-    const result = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/issue/${ticketKey}?fields=summary,description"`, { encoding: 'utf8' });
+    console.log(`Fetching Jira ticket: ${ticketKey}`);
+    const result = execSync(`curl -s -H "Authorization: Basic ${auth}" -H "Content-Type: application/json" "${jiraEndpoint}/rest/api/2/issue/${ticketKey}?fields=summary,description,issuetype"`, { encoding: 'utf8' });
+    
+    console.log(`Jira API response for ${ticketKey}:`, result.substring(0, 200) + '...');
+    
     const ticketData = JSON.parse(result);
     
-    return {
+    if (ticketData.errorMessages) {
+      console.warn(`Jira API error for ${ticketKey}:`, ticketData.errorMessages);
+      return null;
+    }
+    
+    const jiraInfo = {
       summary: ticketData.fields?.summary || '',
-      description: ticketData.fields?.description || ''
+      description: ticketData.fields?.description || '',
+      issueType: ticketData.fields?.issuetype?.name || ''
     };
+    
+    console.log(`Successfully fetched ${ticketKey}:`, jiraInfo.summary);
+    return jiraInfo;
   } catch (error) {
-    console.warn(`Could not fetch Jira ticket ${ticketKey}:`, error.message);
+    console.warn(`Error fetching Jira ticket ${ticketKey}:`, error.message);
     return null;
   }
 }
@@ -225,35 +240,62 @@ async function generateBusinessDescription(prData, jiraContext = null) {
   }
   
   try {
-    // Prepare context for LLM
+    // Prepare comprehensive context for LLM
     let context = `PR Title: ${prData.title}\n`;
-    if (prData.body) {
-      context += `PR Description: ${prData.body}\n`;
-    }
+    context += `Repository: ${prData.repoName}\n`;
     
-    if (jiraContext) {
-      context += `Jira Ticket Summary: ${jiraContext.summary}\n`;
-      if (jiraContext.description) {
-        context += `Jira Ticket Description: ${jiraContext.description}\n`;
+    if (prData.body && prData.body.trim()) {
+      // Extract key sections from PR body
+      context += `PR Description: ${prData.body}\n`;
+      
+      // Look for specific sections that provide business context
+      const summaryMatch = prData.body.match(/##?\s*Summary\s*\r?\n\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*##|$)/is);
+      if (summaryMatch) {
+        context += `PR Summary: ${summaryMatch[1].trim()}\n`;
+      }
+      
+      const impactMatch = prData.body.match(/\*\*Impact:\*\*\s*(.+?)(?:\r?\n\s*\r?\n|\r?\n\s*\*\*|$)/is);
+      if (impactMatch) {
+        context += `Business Impact: ${impactMatch[1].trim()}\n`;
       }
     }
     
-    const prompt = `You are analyzing a software development change for a business changelog. Convert this technical change into a clear, business-focused description that explains the customer and business value.
+    if (jiraContext) {
+      context += `\nJira Ticket (${prData.kanTickets[0]}):\n`;
+      context += `- Summary: ${jiraContext.summary}\n`;
+      context += `- Type: ${jiraContext.issueType}\n`;
+      if (jiraContext.description && jiraContext.description.trim()) {
+        context += `- Description: ${jiraContext.description}\n`;
+      }
+    }
+    
+    const prompt = `You are creating a business changelog entry for Mokka, an AI-powered recruitment platform. Your job is to transform technical development work into compelling business value statements that executives and customers would find meaningful.
 
-Context about Mokka: We are an AI-powered recruitment platform that helps companies interview and evaluate candidates through AI interviews, candidate scoring, and ATS integrations.
+MOKKA PLATFORM CONTEXT:
+- AI-powered recruitment platform for companies to evaluate candidates
+- Core features: AI interviews, candidate scoring, ATS integrations (Workable, SparkHire, Kombo)
+- Users: Recruiters, HR teams, hiring managers
+- Key workflows: Candidate invitation → AI interview → Scoring → ATS sync → Hiring decisions
 
-Technical Change:
+TECHNICAL CHANGE DETAILS:
 ${context}
 
-Instructions:
-- Focus on business impact and customer value, not technical details
-- Write 1-2 sentences maximum
-- Use language that business stakeholders and customers would understand
-- Explain what benefit this brings to users/customers/business
-- Avoid technical jargon like "feat:", "fix:", "refactor", etc.
-- If this seems like a minor technical change, describe it briefly as "Technical improvements to enhance system reliability"
+WRITING GUIDELINES:
+- Write 2-3 specific sentences explaining WHAT was done and WHY it matters
+- Lead with the business benefit, then explain the capability
+- Use active voice and specific metrics/outcomes when possible
+- Include the user impact (recruiters, candidates, or hiring managers)
+- Avoid generic phrases like "enhanced", "improved", "better" without specifics
+- If it's ATS-related, mention the specific ATS system and workflow benefit
+- If it's AI interview related, mention the scoring/evaluation improvement
+- If it's candidate flow related, mention the recruiter workflow impact
 
-Business Description:`;
+EXAMPLES OF GOOD DESCRIPTIONS:
+- "Automated score sharing with Workable and SparkHire eliminates manual data entry, reducing recruiter workload by sending candidate profiles and scores directly to external ATS systems upon interview completion."
+- "Extended assessment link validity from 7 to 30 days, reducing candidate frustration from expired invitations and decreasing support tickets by 40%."
+- "Fixed auto-rejection rules for salary and language requirements that were incorrectly processing qualified candidates, preventing revenue loss from missed hires."
+
+Transform this technical change into a compelling business description:`;
     
     const payload = {
       contents: [{
