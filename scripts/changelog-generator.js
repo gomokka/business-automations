@@ -58,15 +58,19 @@ async function getPRsFromLastWeek() {
     const masterPRs = execSync(`gh search prs --owner=${GITHUB_ORG} --state=closed --merged --merged-at=${start}..${end} --base=master --limit=50 --json title,number,url,body,author,repository`, { encoding: 'utf8' });
     console.log('Master PRs result length:', masterPRs.length);
     
-    const allPRs = [
-      ...JSON.parse(mainPRs || '[]'),
-      ...JSON.parse(masterPRs || '[]')
-    ];
+    const mainPRsData = JSON.parse(mainPRs || '[]');
+    const masterPRsData = JSON.parse(masterPRs || '[]');
+    console.log('Main PRs parsed:', mainPRsData.length);
+    console.log('Master PRs parsed:', masterPRsData.length);
+    
+    const allPRs = [...mainPRsData, ...masterPRsData];
+    console.log('Total PRs before deduplication:', allPRs.length);
     
     // Remove duplicates by URL
     const uniquePRs = allPRs.filter((pr, index, self) => 
       index === self.findIndex(p => p.url === pr.url)
     );
+    console.log('Unique PRs after deduplication:', uniquePRs.length);
     
     return uniquePRs;
   } catch (error) {
