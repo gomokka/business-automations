@@ -355,13 +355,16 @@ HANDLING MINIMAL DATA PRs - SPECIFIC EXAMPLES:
 - Use repository name to infer service purpose: scoring services = evaluation improvements, api services = performance/reliability, frontend = user experience
 
 OUTPUT FORMATTING - CRITICAL REQUIREMENTS:
-- MANDATORY: Use markdown hyperlink format for ALL Jira tickets: [KAN-123](https://go-mokka.atlassian.net/browse/KAN-123)
-- MANDATORY: Use markdown hyperlink format for ALL PRs: [PR #123](https://github.com/gomokka/repo/pull/123)
-- NEVER use plain text like "KAN-123" or "PR #123" - ALWAYS make them clickable links
+- MANDATORY: KAN tickets and PR links MUST be at the END of each description, not at the beginning
+- MANDATORY: Use Slack hyperlink format: <https://go-mokka.atlassian.net/browse/KAN-123|KAN-123>
+- MANDATORY: Use Slack hyperlink format for PRs: <https://github.com/gomokka/repo/pull/123|PR #123>
+- NEVER put KAN tickets at the beginning of descriptions - they belong at the end with contributor info
+- NEVER use markdown format [text](url) - Slack requires <url|text> format for proper hyperlink rendering
 - NEVER use backticks around technical terms - they create distracting red highlights in Slack
 - Technical terms should be in plain text: book_a_demo, TestTaskInvitationEmailTemplate, rnr_experience
 - Replace PR_URL_PROVIDED with the actual PR URL from the data
-- Example correct format: _[KAN-2692](https://go-mokka.atlassian.net/browse/KAN-2692) (Marcio Oliveira) - [PR #1126](https://github.com/gomokka/application-frontend/pull/1126)_
+- Example CORRECT format: _Fixed auto-rejection rules for salary requirements. (Marcio Oliveira) - <https://go-mokka.atlassian.net/browse/KAN-2692|KAN-2692>, <https://github.com/gomokka/application-frontend/pull/1126|PR #1126>_
+- Example WRONG format: _<https://go-mokka.atlassian.net/browse/KAN-2692|KAN-2692> Fixed auto-rejection rules..._ (KAN at beginning is WRONG)
 
 EXAMPLES OF GOOD DESCRIPTIONS:
 - "Switched AI model from GPT-4 to GPT-4o-mini for candidate interview analysis to reduce processing costs"
